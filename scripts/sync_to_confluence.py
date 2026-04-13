@@ -162,36 +162,22 @@ def is_archived_path(file_path: Path) -> bool:
 
 
 def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
-    """Archive a Confluence page using the Confluence Cloud v2 PUT /pages/{id} API."""
-    page_info = confluence.get(f"api/v2/pages/{page_id}", params={"body-format": "storage"})
-    log.info("Page info keys: %s", list(page_info.keys()))
-    log.info("Page version: %s", page_info.get("version"))
-    log.info("Page body keys: %s", list(page_info.get("body", {}).keys()))
+    """Archive a Confluence page using POST /rest/api/content/archive.
 
+    Neither the v1 PUT (silently ignores status=archived) nor the v2 PUT
+    (PageUpdateAllowedStatus only allows CURRENT/DRAFT) support archiving.
+    The correct endpoint is the dedicated v1 archive action.
+    """
+    page_info = confluence.get_page_by_id(page_id, expand="version")
     if page_info.get("status") == "archived":
         log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
         return
 
-    payload = {
-        "id": page_id,
-        "status": "archived",
-        "title": page_info["title"],
-        "spaceId": page_info["spaceId"],
-        "version": {"number": page_info["version"]["number"] + 1},
-        "body": {
-            "representation": "storage",
-            "value": page_info.get("body", {}).get("storage", {}).get("value", ""),
-        },
-    }
-    log.info("Sending archive payload (excl. body): %s", {k: v for k, v in payload.items() if k != "body"})
-
-    # Use _session directly to bypass atlassian-python-api error mangling
-    # so we can see the actual Confluence error response
-    response = confluence._session.put(
-        f"{confluence.url}/api/v2/pages/{page_id}",
-        json=payload,
+    response = confluence._session.post(
+        f"{confluence.url}/rest/api/content/archive",
+        json={"pages": [{"id": page_id}]},
     )
-    log.info("Confluence response %s: %s", response.status_code, response.text[:1000])
+    log.info("Archive response %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
     log.info("Archived page '%s' (id=%s)", title, page_id)
 
@@ -307,7 +293,7 @@ def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None
             log.warning("No Confluence page found for deleted file '%s' — skipping", title)
             return
 
-    page_info = confluence.get(f"api/v2/pages/{page_id}")
+    page_info = confluence.get_page_by_id(page_id, expand="version")
     if page_info.get("status") == "archived":
         log.info("Page (id=%s) is already archived — skipping hard delete", page_id)
         return

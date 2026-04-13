@@ -1,0 +1,10 @@
+# Files and patterns to exclude from Confluence sync.
+# Uses the same glob syntax as .gitignore (fnmatch-style).
+# Patterns match against the file path relative to the repo root.
+
+# Repo meta files
+README.md
+CLAUDE.md
+
+# Draft staging area (also excluded individually via draft: true frontmatter)
+docs/drafts/**

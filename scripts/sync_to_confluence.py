@@ -34,6 +34,20 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 WRITTEN_BACK_FILE = "/tmp/written_back.txt"
+CONFLUENCEIGNORE = Path(".confluenceignore")
+
+
+def load_ignore_patterns() -> list[str]:
+    """Load exclusion patterns from .confluenceignore if it exists."""
+    if not CONFLUENCEIGNORE.exists():
+        return []
+    lines = CONFLUENCEIGNORE.read_text(encoding="utf-8").splitlines()
+    return [l.strip() for l in lines if l.strip() and not l.startswith("#")]
+
+
+def is_ignored(file_path: Path, patterns: list[str]) -> bool:
+    """Return True if file_path matches any pattern from .confluenceignore."""
+    return any(file_path.match(pattern) for pattern in patterns)
 
 # Module-level cache: maps cumulative path string → Confluence page ID
 # e.g. "docs" → "123456", "docs/api" → "789012"
@@ -143,12 +157,13 @@ def resolve_parent_chain(
 
 
 def apply_labels(confluence: Confluence, page_id: str, labels: list[str]) -> None:
-    """Add labels to a Confluence page."""
-    for label in labels:
-        try:
-            confluence.set_page_label(page_id, label)
-        except Exception as exc:
-            log.warning("Failed to set label '%s' on page %s: %s", label, page_id, exc)
+    """Add labels to a Confluence page via the REST API."""
+    if not labels:
+        return
+    url = f"rest/api/content/{page_id}/label"
+    data = [{"prefix": "global", "name": label} for label in labels]
+    confluence.post(url, data=data)
+    log.info("Applied labels %s to page %s", labels, page_id)
 
 
 def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
@@ -178,6 +193,16 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
             apply_labels(confluence, pinned_id, labels)
     else:
         existing_id = confluence.get_page_id(space=space_key, title=title)
+
+        # If a custom title was set but not found, also try the path-based title.
+        # This handles the case where a file already exists in Confluence under its
+        # path-based title and the author is adding a title to frontmatter for the
+        # first time — without this fallback a duplicate page would be created.
+        path_title = str(file_path.with_suffix(""))
+        if not existing_id and title != path_title:
+            log.info("Title '%s' not found, checking path-based title '%s'", title, path_title)
+            existing_id = confluence.get_page_id(space=space_key, title=path_title)
+
         if existing_id:
             log.info("Updating page '%s' (id=%s)", title, existing_id)
             confluence.update_page(
@@ -246,6 +271,8 @@ def main() -> None:
     # Clear write-back tracking file
     Path(WRITTEN_BACK_FILE).unlink(missing_ok=True)
 
+    ignore_patterns = load_ignore_patterns()
+
     errors = []
 
     # Handle deletions
@@ -256,6 +283,9 @@ def main() -> None:
     if deleted_files:
         log.info("Deleting %d page(s): %s", len(deleted_files), [str(f) for f in deleted_files])
     for file_path in deleted_files:
+        if is_ignored(file_path, ignore_patterns):
+            log.info("Ignoring deleted file (matches .confluenceignore): %s", file_path)
+            continue
         try:
             delete_page(confluence=confluence, space_key=config["confluence_space_key"], file_path=file_path)
         except Exception as exc:
@@ -274,6 +304,9 @@ def main() -> None:
     log.info("Processing %d changed file(s): %s", len(changed_files), [str(f) for f in changed_files])
 
     for file_path in changed_files:
+        if is_ignored(file_path, ignore_patterns):
+            log.info("Ignoring file (matches .confluenceignore): %s", file_path)
+            continue
         if not file_path.exists():
             log.warning("File %s not found — skipping", file_path)
             continue

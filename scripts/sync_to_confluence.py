@@ -150,6 +150,17 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
         )
 
 
+def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
+    """Remove the Confluence page corresponding to a deleted markdown file."""
+    title = str(file_path.with_suffix(""))
+    page_id = confluence.get_page_id(space=space_key, title=title)
+    if not page_id:
+        log.warning("No Confluence page found for deleted file '%s' — skipping", title)
+        return
+    log.info("Removing page '%s' (id=%s)", title, page_id)
+    confluence.remove_page(page_id)
+
+
 def main() -> None:
     config = load_config()
 
@@ -160,26 +171,36 @@ def main() -> None:
         cloud=True,
     )
 
-    changed_files_env = os.environ.get("CHANGED_FILES", "").strip()
-    if not changed_files_env:
-        log.info("No changed files detected. Exiting.")
-        return
+    errors = []
 
-    changed_files = [
-        Path(f) for f in changed_files_env.split()
+    # Handle deletions
+    deleted_files = [
+        Path(f) for f in os.environ.get("DELETED_FILES", "").split()
         if f.endswith(".md")
     ]
+    if deleted_files:
+        log.info("Deleting %d page(s): %s", len(deleted_files), [str(f) for f in deleted_files])
+    for file_path in deleted_files:
+        try:
+            delete_page(confluence=confluence, space_key=config["confluence_space_key"], file_path=file_path)
+        except Exception as exc:
+            log.error("Failed to delete page for %s: %s", file_path, exc)
+            errors.append((file_path, exc))
 
-    if not changed_files:
-        log.info("No .md files in changed set. Exiting.")
+    # Handle creates/updates
+    changed_files = [
+        Path(f) for f in os.environ.get("CHANGED_FILES", "").split()
+        if f.endswith(".md")
+    ]
+    if not changed_files and not deleted_files:
+        log.info("No changes detected. Exiting.")
         return
 
     log.info("Processing %d changed file(s): %s", len(changed_files), [str(f) for f in changed_files])
 
-    errors = []
     for file_path in changed_files:
         if not file_path.exists():
-            log.warning("File %s not found (deleted?) — skipping", file_path)
+            log.warning("File %s not found — skipping", file_path)
             continue
         try:
             sync_page(confluence=confluence, space_key=config["confluence_space_key"], file_path=file_path)

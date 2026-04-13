@@ -81,6 +81,26 @@ By default, page titles use the full relative path without the `.md` extension:
 
 This guarantees uniqueness within the Confluence space. Override with `title` in frontmatter for a human-readable title.
 
+## Keeping Your Local Branch Up to Date
+
+After every sync, the workflow pushes a `[skip ci]` commit back to `main` that updates `confluence_id` and `confluence_version` in the frontmatter of synced files. This means `main` will regularly advance without you having made a commit yourself.
+
+**Pull before you push** to avoid conflicts:
+
+```bash
+git pull --rebase origin main
+```
+
+If you forget and your push is rejected, a rebase is the cleanest fix:
+
+```bash
+git fetch origin
+git rebase origin/main
+git push
+```
+
+The write-back commits only touch frontmatter metadata, so conflicts are rare — but they can happen if you edit a file locally at the same time a sync runs.
+
 ## Excluding Files
 
 Add patterns to `.confluenceignore` at the repo root to prevent files from being synced:

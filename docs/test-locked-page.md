@@ -10,8 +10,4 @@ This page is managed by the git sync workflow and is locked for editing in Confl
 
 Edits should be made in the git repository and will be synced automatically.
 
-<<<<<<< HEAD
-This page should be locked
-=======
 This page should be locked!
->>>>>>> ae2314d (added some logging to figure out why locking isnt' working)

@@ -13,3 +13,5 @@ Welcome to the project documentation. This repository contains markdown document
 1. Edit or add a `.md` file and push to `main`
 2. GitHub Actions detects the changed files
 3. Each changed file is synced to Confluence, preserving the folder hierarchy
+
+Testing out the CI updating pages

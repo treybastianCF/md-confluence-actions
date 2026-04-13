@@ -25,3 +25,5 @@ All responses are JSON with the following envelope:
 - `data` — the response payload
 - `error` — present only on failure, contains `code` and `message`
 - `meta` — pagination info where applicable
+
+This is a test to make sure the CI runner updates the page

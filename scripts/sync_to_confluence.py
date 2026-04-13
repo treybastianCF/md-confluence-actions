@@ -162,30 +162,37 @@ def is_archived_path(file_path: Path) -> bool:
 
 
 def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
-    """Archive a Confluence page using the Confluence Cloud v2 PUT /pages/{id} API.
-
-    The v1 REST API status enum does not include 'archived'.
-    The v2 PUT requires: id, title, status, spaceId, version.number, and body.
-    Body must be fetched first using body-format=storage.
-    """
+    """Archive a Confluence page using the Confluence Cloud v2 PUT /pages/{id} API."""
     page_info = confluence.get(f"api/v2/pages/{page_id}", params={"body-format": "storage"})
+    log.info("Page info keys: %s", list(page_info.keys()))
+    log.info("Page version: %s", page_info.get("version"))
+    log.info("Page body keys: %s", list(page_info.get("body", {}).keys()))
+
     if page_info.get("status") == "archived":
         log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
         return
-    confluence.put(
-        f"api/v2/pages/{page_id}",
-        data={
-            "id": page_id,
-            "status": "archived",
-            "title": page_info["title"],
-            "spaceId": page_info["spaceId"],
-            "version": {"number": page_info["version"]["number"] + 1},
-            "body": {
-                "representation": "storage",
-                "value": page_info["body"]["storage"]["value"],
-            },
+
+    payload = {
+        "id": page_id,
+        "status": "archived",
+        "title": page_info["title"],
+        "spaceId": page_info["spaceId"],
+        "version": {"number": page_info["version"]["number"] + 1},
+        "body": {
+            "representation": "storage",
+            "value": page_info.get("body", {}).get("storage", {}).get("value", ""),
         },
+    }
+    log.info("Sending archive payload (excl. body): %s", {k: v for k, v in payload.items() if k != "body"})
+
+    # Use _session directly to bypass atlassian-python-api error mangling
+    # so we can see the actual Confluence error response
+    response = confluence._session.put(
+        f"{confluence.url}/api/v2/pages/{page_id}",
+        json=payload,
     )
+    log.info("Confluence response %s: %s", response.status_code, response.text[:1000])
+    response.raise_for_status()
     log.info("Archived page '%s' (id=%s)", title, page_id)
 
 

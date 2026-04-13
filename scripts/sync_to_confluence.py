@@ -4,10 +4,12 @@ Sync changed markdown files to Confluence, mirroring the folder structure
 as a page hierarchy.
 
 Frontmatter properties (all optional):
-  title:        Override the Confluence page title (default: file path without extension)
-  draft:        If true, skip this file entirely
-  labels:       List of Confluence labels to apply to the page
-  confluence_id: Pinned Confluence page ID — auto-populated after first sync
+  title:             Override the Confluence page title (default: file path without extension)
+  draft:             If true, skip this file entirely
+  labels:            List of Confluence labels to apply to the page
+  confluence_id:     Pinned Confluence page ID — auto-populated after first sync
+  confluence_version: Confluence version number after last sync — auto-populated, used for drift detection
+  lock:              If true, restrict page editing in Confluence to the sync service account only
 
 Lookup priority: confluence_id (if present) → title → path-based title
 
@@ -78,12 +80,13 @@ def md_to_storage(content: str) -> str:
     )
 
 
-def write_confluence_id(file_path: Path, page_id: str) -> None:
-    """Write the confluence_id into a file's frontmatter in-place."""
+def write_back_metadata(file_path: Path, **updates) -> None:
+    """Write one or more frontmatter fields back to a file in-place."""
     post = frontmatter.load(file_path)
-    post["confluence_id"] = page_id
+    for key, value in updates.items():
+        post[key] = value
     file_path.write_text(frontmatter.dumps(post), encoding="utf-8")
-    log.info("Wrote confluence_id=%s to %s", page_id, file_path)
+    log.info("Wrote %s to %s", updates, file_path)
     with open(WRITTEN_BACK_FILE, "a") as f:
         f.write(str(file_path) + "\n")
 
@@ -177,7 +180,6 @@ def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
         f"{confluence.url}/rest/api/content/archive",
         json={"pages": [{"id": page_id}]},
     )
-    log.info("Archive response %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
     log.info("Archived page '%s' (id=%s)", title, page_id)
 
@@ -192,7 +194,28 @@ def apply_labels(confluence: Confluence, page_id: str, labels: list[str]) -> Non
     log.info("Applied labels %s to page %s", labels, page_id)
 
 
-def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
+def get_service_account_id(confluence: Confluence) -> str:
+    """Return the accountId of the currently authenticated Confluence user."""
+    result = confluence.get("rest/api/user/current")
+    return result["accountId"]
+
+
+def lock_page(confluence: Confluence, page_id: str, account_id: str) -> None:
+    """Restrict page editing to only the service account."""
+    url = f"{confluence.url}/rest/api/content/{page_id}/restriction/byOperation/update"
+    payload = {
+        "operation": "update",
+        "restrictions": {
+            "user": [{"type": "known", "accountId": account_id}],
+            "group": [],
+        },
+    }
+    response = confluence._session.put(url, json=payload)
+    response.raise_for_status()
+    log.info("Locked page %s (edit restricted to service account %s)", page_id, account_id)
+
+
+def sync_page(confluence: Confluence, space_key: str, file_path: Path, account_id: str | None = None) -> None:
     """Full sync lifecycle for a single markdown file, reading frontmatter for metadata."""
     post = frontmatter.load(file_path)
     meta = post.metadata
@@ -205,6 +228,8 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
     body = md_to_storage(post.content)
     labels = meta.get("labels", [])
     pinned_id = meta.get("confluence_id")
+    stored_version = meta.get("confluence_version")
+    should_lock = meta.get("lock", False)
 
     if meta.get("archived") or is_archived_path(file_path):
         log.info("Archiving page for %s", file_path)
@@ -221,9 +246,20 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
         return
 
     if pinned_id:
+        # Drift detection: check if Confluence version has advanced beyond our last sync
+        if stored_version is not None:
+            page_info = confluence.get_page_by_id(pinned_id, expand="version")
+            current_version = page_info["version"]["number"]
+            if current_version > stored_version:
+                log.warning(
+                    "Drift detected on '%s' (id=%s): Confluence version %d > expected %d. "
+                    "Overwriting with git version.",
+                    title, pinned_id, current_version, stored_version,
+                )
+
         # Update by pinned ID — title lookup not needed
         log.info("Updating page by pinned confluence_id=%s ('%s')", pinned_id, title)
-        confluence.update_page(
+        result = confluence.update_page(
             page_id=pinned_id,
             title=title,
             body=body,
@@ -231,6 +267,10 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
         )
         if labels:
             apply_labels(confluence, pinned_id, labels)
+        new_version = result["version"]["number"]
+        write_back_metadata(file_path, confluence_id=pinned_id, confluence_version=new_version)
+        if should_lock and account_id:
+            lock_page(confluence, pinned_id, account_id)
     else:
         existing_id = confluence.get_page_id(space=space_key, title=title)
 
@@ -245,7 +285,7 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
 
         if existing_id:
             log.info("Updating page '%s' (id=%s)", title, existing_id)
-            confluence.update_page(
+            result = confluence.update_page(
                 page_id=existing_id,
                 title=title,
                 body=body,
@@ -253,7 +293,10 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
             )
             if labels:
                 apply_labels(confluence, existing_id, labels)
-            write_confluence_id(file_path, existing_id)
+            new_version = result["version"]["number"]
+            write_back_metadata(file_path, confluence_id=existing_id, confluence_version=new_version)
+            if should_lock and account_id:
+                lock_page(confluence, existing_id, account_id)
         else:
             parent_id = resolve_parent_chain(confluence, space_key, file_path)
             log.info("Creating content page '%s'", title)
@@ -268,7 +311,10 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
             log.info("Created page '%s' → id=%s", title, new_id)
             if labels:
                 apply_labels(confluence, new_id, labels)
-            write_confluence_id(file_path, new_id)
+            new_version = result["version"]["number"]
+            write_back_metadata(file_path, confluence_id=new_id, confluence_version=new_version)
+            if should_lock and account_id:
+                lock_page(confluence, new_id, account_id)
 
 
 def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
@@ -311,6 +357,9 @@ def main() -> None:
         password=config["confluence_api_token"],
         cloud=True,
     )
+
+    account_id = get_service_account_id(confluence)
+    log.info("Authenticated as account_id=%s", account_id)
 
     # Clear write-back tracking file
     Path(WRITTEN_BACK_FILE).unlink(missing_ok=True)
@@ -355,7 +404,7 @@ def main() -> None:
             log.warning("File %s not found — skipping", file_path)
             continue
         try:
-            sync_page(confluence=confluence, space_key=config["confluence_space_key"], file_path=file_path)
+            sync_page(confluence=confluence, space_key=config["confluence_space_key"], file_path=file_path, account_id=account_id)
         except Exception as exc:
             log.error("Failed to sync %s: %s", file_path, exc)
             errors.append((file_path, exc))

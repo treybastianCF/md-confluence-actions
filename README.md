@@ -58,6 +58,7 @@ All frontmatter fields are optional. Add them to the top of any markdown file:
 ---
 title: "My Page Title"      # Overrides the default path-based title in Confluence
 draft: true                  # Exclude this file from sync entirely
+archived: true               # Archive the page in Confluence (stops syncing updates)
 labels:                      # Confluence labels to apply to the page
   - api
   - reference
@@ -95,6 +96,18 @@ Patterns follow the same glob syntax as `.gitignore`. Files matching any pattern
 
 Each directory in the path gets its own Confluence page (e.g., `docs`, `docs/api`) with an empty body, created automatically the first time a file in that directory is synced.
 
+## Archiving Pages
+
+Git is the source of truth. Deleting a file from git permanently removes the Confluence page. Archiving is a separate, explicit intent for retiring a page while keeping it accessible via search and direct URL.
+
+**Two ways to archive a page:**
+
+1. **`archived: true` frontmatter** — add to any file's frontmatter. The file stays in git, the Confluence page is archived, and future content changes are no longer synced.
+
+2. **`archived/` folder** — move the file into any folder named `archived/` (e.g. `git mv docs/api/old.md docs/archived/old.md`). The git move makes intent clear in history. The page is archived in Confluence and the old path is not hard-deleted.
+
+Archived pages are hidden from Confluence navigation but remain accessible via search and direct URL.
+
 ## Deleted Files
 
-When a markdown file is deleted and pushed, the corresponding Confluence page is removed. The script reads the deleted file's frontmatter from the previous git commit to find its `confluence_id` for a reliable lookup.
+When a markdown file is deleted and pushed (not moved to `archived/`), the corresponding Confluence page is permanently removed. The script reads the deleted file's frontmatter from the previous git commit to find its `confluence_id` for a reliable lookup. If the page was already archived, the hard delete is skipped.

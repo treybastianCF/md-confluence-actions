@@ -1,0 +1,47 @@
+name: Sync Markdown to Confluence
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.md'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed markdown files
+        id: changed-files
+        uses: tj-actions/changed-files@v47
+        with:
+          files: |
+            **.md
+
+      - name: Set up Python
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: pip install -r scripts/requirements.txt
+
+      - name: Sync changed files to Confluence
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CONFLUENCE_URL: ${{ secrets.CONFLUENCE_URL }}
+          CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        run: python scripts/sync_to_confluence.py

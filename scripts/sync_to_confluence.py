@@ -162,28 +162,16 @@ def is_archived_path(file_path: Path) -> bool:
 
 
 def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
-    """Archive a Confluence page by setting its status to 'archived'. Idempotent."""
-    page_info = confluence.get_page_by_id(page_id, expand="version,body.storage")
+    """Archive a Confluence page using the Confluence Cloud v2 archive API. Idempotent."""
+    # Check current status via v2 API — v1 get_page_by_id does not reflect archive state
+    page_info = confluence.get(f"api/v2/pages/{page_id}")
     if page_info.get("status") == "archived":
         log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
         return
-    current_version = page_info["version"]["number"]
-    existing_body = page_info["body"]["storage"]["value"]
-    confluence.put(
-        f"rest/api/content/{page_id}",
-        data={
-            "id": page_id,
-            "type": "page",
-            "status": "archived",
-            "title": title,
-            "version": {"number": current_version + 1},
-            "body": {
-                "storage": {
-                    "value": existing_body,
-                    "representation": "storage",
-                }
-            },
-        },
+    # Confluence Cloud archive endpoint (v2) — PUT status via v1 is silently ignored
+    confluence.post(
+        "api/v2/pages/archive",
+        data={"pageIds": [page_id]},
     )
     log.info("Archived page '%s' (id=%s)", title, page_id)
 
@@ -299,7 +287,7 @@ def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None
             log.warning("No Confluence page found for deleted file '%s' — skipping", title)
             return
 
-    page_info = confluence.get_page_by_id(page_id, expand="version")
+    page_info = confluence.get(f"api/v2/pages/{page_id}")
     if page_info.get("status") == "archived":
         log.info("Page (id=%s) is already archived — skipping hard delete", page_id)
         return

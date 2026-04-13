@@ -27,18 +27,32 @@ Set `DELETED_FILES` the same way to test page deletion.
 
 ## Architecture
 
-**Workflow** (`.github/workflows/sync-to-confluence.yml`) — detects changed and deleted `.md` files, then passes them to the script via `CHANGED_FILES` and `DELETED_FILES` env vars. Handles three cases in the "Determine files to sync" step:
+**Workflow** (`.github/workflows/sync-to-confluence.yml`) — detects changed and deleted `.md` files, passes them via `CHANGED_FILES` and `DELETED_FILES` env vars. The "Determine files to sync" step handles three cases:
 - `workflow_dispatch` or first push (before SHA all zeros) → `git ls-files '*.md'` for full sync
 - Normal push → `tj-actions/changed-files` outputs
 
+After the sync script runs, a second step reads `/tmp/written_back.txt` and commits any files the script wrote `confluence_id` back to, using `[skip ci]` to prevent re-triggering.
+
 **Script** (`scripts/sync_to_confluence.py`) — uses `atlassian-python-api` and the Confluence v1 REST API (`/wiki/rest/api/content`). Key flow:
-1. `resolve_parent_chain()` walks directory segments of a file path, calling `get_or_create_page()` for each folder level. Results are cached in `_page_id_cache` (module-level dict) to avoid redundant API calls within a run.
-2. `sync_page()` converts markdown to HTML via the `markdown` library (with `fenced_code`, `tables`, `toc` extensions), then creates or updates the Confluence page.
-3. `delete_page()` looks up the page by title and calls `remove_page()`.
 
-**Page title convention**: full relative path without extension — e.g. `docs/api/endpoints.md` → title `docs/api/endpoints`. Folder pages also use cumulative paths: `docs`, `docs/api`. This guarantees uniqueness within the Confluence space.
+1. Loads `.confluenceignore` patterns at startup; skips any matching file on both sync and delete.
+2. **Sync path**: reads frontmatter (`python-frontmatter`), then:
+   - `draft: true` → skip entirely
+   - `confluence_id` present → `update_page()` directly by ID
+   - Otherwise → look up by `title` (frontmatter) then fall back to path-based title, then create if still not found
+   - After first find/create: writes `confluence_id` back to the file
+3. **Delete path**: reads deleted file content from `git show HEAD^:{path}` to retrieve `confluence_id` from frontmatter; falls back to path-based title lookup if not available.
+4. `resolve_parent_chain()` walks directory segments, calling `get_or_create_page()` for each folder level. Results cached in `_page_id_cache` (module-level dict) to avoid redundant API calls within a run.
 
-**Confluence API notes**: `update_page()` from `atlassian-python-api` handles version incrementing internally — do not pass `version_number`. Authentication uses email + API token with `cloud=True`.
+**Page title convention**: full relative path without extension — e.g. `docs/api/endpoints.md` → title `docs/api/endpoints`. Folder pages also use cumulative paths: `docs`, `docs/api`. Override per-file with `title` in frontmatter.
+
+**`.confluenceignore`**: gitignore-style pattern file at the repo root. Loaded at runtime with `fnmatch`/`Path.match()`. `README.md`, `CLAUDE.md`, and `docs/drafts/**` excluded by default.
+
+## Confluence API Notes
+
+- `update_page()` from `atlassian-python-api` handles version incrementing internally — do not pass `version_number`
+- Labels use a direct `confluence.post("rest/api/content/{id}/label", data=[...])` call rather than `set_page_label()` to avoid silent failures
+- Authentication uses email + API token with `cloud=True`
 
 ## Required GitHub Secrets
 

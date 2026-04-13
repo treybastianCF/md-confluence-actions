@@ -376,7 +376,7 @@ def main() -> None:
 
     # Handle deletions
     deleted_files = [
-        Path(f) for f in os.environ.get("DELETED_FILES", "").split()
+        Path(f) for f in os.environ.get("DELETED_FILES", "").splitlines()
         if f.endswith(".md")
     ]
     if deleted_files:
@@ -393,7 +393,7 @@ def main() -> None:
 
     # Handle creates/updates
     changed_files = [
-        Path(f) for f in os.environ.get("CHANGED_FILES", "").split()
+        Path(f) for f in os.environ.get("CHANGED_FILES", "").splitlines()
         if f.endswith(".md")
     ]
     if not changed_files and not deleted_files:

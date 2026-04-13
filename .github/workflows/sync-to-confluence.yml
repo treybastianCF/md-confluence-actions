@@ -11,6 +11,9 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    concurrency:
+      group: confluence-sync
+      cancel-in-progress: false
     permissions:
       contents: write
 
@@ -26,20 +29,27 @@ jobs:
         with:
           files: |
             **.md
+          separator: "\n"
 
       - name: Determine files to sync
         id: files
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
             echo "Full sync — syncing all markdown files"
-            TO_SYNC=$(git ls-files '*.md' | tr '\n' ' ')
+            TO_SYNC=$(git ls-files '*.md')
             DELETED=""
           else
             TO_SYNC="${{ steps.changed-files.outputs.all_changed_files }}"
             DELETED="${{ steps.changed-files.outputs.deleted_files }}"
           fi
-          echo "to_sync=$TO_SYNC" >> $GITHUB_OUTPUT
-          echo "deleted=$DELETED" >> $GITHUB_OUTPUT
+          {
+            echo "to_sync<<DELIM"
+            echo "$TO_SYNC"
+            echo "DELIM"
+            echo "deleted<<DELIM"
+            echo "$DELETED"
+            echo "DELIM"
+          } >> $GITHUB_OUTPUT
           if [ -n "$TO_SYNC" ] || [ -n "$DELETED" ]; then
             echo "has_work=true" >> $GITHUB_OUTPUT
           else
@@ -76,7 +86,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          xargs git add < /tmp/written_back.txt
+          while IFS= read -r file; do git add "$file"; done < /tmp/written_back.txt
           git diff --staged --quiet && echo "Nothing to commit." && exit 0
-          git commit -m "chore: write confluence_id to synced pages [skip ci]"
+          git commit -m "chore: write back confluence metadata [skip ci]"
           git push

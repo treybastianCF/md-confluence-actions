@@ -31,7 +31,7 @@ Set `DELETED_FILES` the same way to test page deletion.
 - `workflow_dispatch` or first push (before SHA all zeros) → `git ls-files '*.md'` for full sync
 - Normal push → `tj-actions/changed-files` outputs
 
-After the sync script runs, a second step reads `/tmp/written_back.txt` and commits any files the script wrote `confluence_id` back to, using `[skip ci]` to prevent re-triggering.
+After the sync script runs, a second step reads `/tmp/written_back.txt` and commits any files the script wrote `confluence_id` and `confluence_version` back to, using `[skip ci]` to prevent re-triggering.
 
 **Script** (`scripts/sync_to_confluence.py`) — uses `atlassian-python-api` and the Confluence v1 REST API (`/wiki/rest/api/content`). Key flow:
 

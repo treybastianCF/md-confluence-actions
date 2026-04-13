@@ -115,3 +115,13 @@ Archived pages are hidden from Confluence navigation but remain accessible via s
 ## Deleted Files
 
 When a markdown file is deleted and pushed (not moved to `archived/`), the corresponding Confluence page is permanently removed. The script reads the deleted file's frontmatter from the previous git commit to find its `confluence_id` for a reliable lookup. If the page was already archived, the hard delete is skipped.
+
+## Drift Detection
+
+If someone edits a page directly in Confluence between syncs, the next sync will log a warning:
+
+```
+WARNING: Drift detected on 'docs/api/endpoints' (id=12345): Confluence version 4 > expected 3. Overwriting with git version.
+```
+
+Git always wins — the page is overwritten with the git version. `confluence_version` in frontmatter is what makes this possible: it's written back after every sync and compared against the live Confluence version number on the next run. If you want to prevent edits in Confluence entirely, use `lock: true` instead.

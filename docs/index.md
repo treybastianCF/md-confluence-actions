@@ -1,3 +1,9 @@
+---
+title: "Documentation Home"
+labels:
+  - docs
+---
+
 # Documentation Home
 
 Welcome to the project documentation. This repository contains markdown documents that are automatically synced to Confluence on every push to `main`.

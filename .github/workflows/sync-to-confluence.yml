@@ -12,7 +12,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -66,3 +66,17 @@ jobs:
           CHANGED_FILES: ${{ steps.files.outputs.to_sync }}
           DELETED_FILES: ${{ steps.files.outputs.deleted }}
         run: python scripts/sync_to_confluence.py
+
+      - name: Commit confluence_id write-backs
+        if: steps.files.outputs.has_work == 'true'
+        run: |
+          if [ ! -f /tmp/written_back.txt ] || [ ! -s /tmp/written_back.txt ]; then
+            echo "No write-backs to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          xargs git add < /tmp/written_back.txt
+          git diff --staged --quiet && echo "Nothing to commit." && exit 0
+          git commit -m "chore: write confluence_id to synced pages [skip ci]"
+          git push

@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 Sync changed markdown files to Confluence, mirroring the folder structure
-as a page hierarchy. Page titles use the full relative path without extension
-(e.g., docs/api/endpoints) to guarantee uniqueness within the space.
+as a page hierarchy.
+
+Frontmatter properties (all optional):
+  title:        Override the Confluence page title (default: file path without extension)
+  draft:        If true, skip this file entirely
+  labels:       List of Confluence labels to apply to the page
+  confluence_id: Pinned Confluence page ID — auto-populated after first sync
+
+Lookup priority: confluence_id (if present) → title → path-based title
 
 Required environment variables:
   CONFLUENCE_URL        e.g. https://your-org.atlassian.net
@@ -10,18 +17,23 @@ Required environment variables:
   CONFLUENCE_API_TOKEN  API token from id.atlassian.com
   CONFLUENCE_SPACE_KEY  Short space key (e.g. DOCS)
   CHANGED_FILES         Space-separated list of changed .md paths (from tj-actions)
+  DELETED_FILES         Space-separated list of deleted .md paths (from tj-actions)
 """
 
 import os
+import subprocess
 import sys
 import logging
 from pathlib import Path
 
+import frontmatter
 import markdown
 from atlassian import Confluence
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
+
+WRITTEN_BACK_FILE = "/tmp/written_back.txt"
 
 # Module-level cache: maps cumulative path string → Confluence page ID
 # e.g. "docs" → "123456", "docs/api" → "789012"
@@ -44,13 +56,22 @@ def load_config() -> dict:
     return config
 
 
-def md_to_storage(md_path: Path) -> str:
-    """Convert a markdown file to Confluence storage format (HTML)."""
-    raw = md_path.read_text(encoding="utf-8")
+def md_to_storage(content: str) -> str:
+    """Convert a markdown string to Confluence storage format (HTML)."""
     return markdown.markdown(
-        raw,
+        content,
         extensions=["fenced_code", "tables", "toc"],
     )
+
+
+def write_confluence_id(file_path: Path, page_id: str) -> None:
+    """Write the confluence_id into a file's frontmatter in-place."""
+    post = frontmatter.load(file_path)
+    post["confluence_id"] = page_id
+    file_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+    log.info("Wrote confluence_id=%s to %s", page_id, file_path)
+    with open(WRITTEN_BACK_FILE, "a") as f:
+        f.write(str(file_path) + "\n")
 
 
 def get_or_create_page(
@@ -93,9 +114,9 @@ def resolve_parent_chain(
     Folder page titles use the cumulative path: "docs", "docs/api", etc.
     Uses _page_id_cache to avoid redundant API calls within a run.
     """
-    parts = list(file_path.parts[:-1])  # drop the filename
+    parts = list(file_path.parts[:-1])
     if not parts:
-        return None  # file at repo root → attach to space root
+        return None
 
     parent_id = None
     cumulative: list[str] = []
@@ -108,11 +129,10 @@ def resolve_parent_chain(
             parent_id = _page_id_cache[cache_key]
             continue
 
-        folder_title = cache_key  # full path as title, e.g. "docs/api"
         page_id = get_or_create_page(
             confluence=confluence,
             space_key=space_key,
-            title=folder_title,
+            title=cache_key,
             parent_id=parent_id,
             body="",
         )
@@ -122,43 +142,95 @@ def resolve_parent_chain(
     return parent_id
 
 
+def apply_labels(confluence: Confluence, page_id: str, labels: list[str]) -> None:
+    """Add labels to a Confluence page."""
+    for label in labels:
+        try:
+            confluence.set_page_label(page_id, label)
+        except Exception as exc:
+            log.warning("Failed to set label '%s' on page %s: %s", label, page_id, exc)
+
+
 def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
-    """Full sync lifecycle for a single markdown file."""
-    # Title = full path without extension, e.g. "docs/api/endpoints"
-    title = str(file_path.with_suffix(""))
-    body = md_to_storage(file_path)
-    parent_id = resolve_parent_chain(confluence, space_key, file_path)
+    """Full sync lifecycle for a single markdown file, reading frontmatter for metadata."""
+    post = frontmatter.load(file_path)
+    meta = post.metadata
 
-    existing_id = confluence.get_page_id(space=space_key, title=title)
+    if meta.get("draft"):
+        log.info("Skipping draft file: %s", file_path)
+        return
 
-    if existing_id:
-        log.info("Updating page '%s' (id=%s)", title, existing_id)
+    title = meta.get("title") or str(file_path.with_suffix(""))
+    body = md_to_storage(post.content)
+    labels = meta.get("labels", [])
+    pinned_id = meta.get("confluence_id")
+
+    if pinned_id:
+        # Update by pinned ID — title lookup not needed
+        log.info("Updating page by pinned confluence_id=%s ('%s')", pinned_id, title)
         confluence.update_page(
-            page_id=existing_id,
+            page_id=pinned_id,
             title=title,
             body=body,
             representation="storage",
         )
+        if labels:
+            apply_labels(confluence, pinned_id, labels)
     else:
-        log.info("Creating content page '%s'", title)
-        confluence.create_page(
-            space=space_key,
-            title=title,
-            body=body,
-            parent_id=parent_id,
-            representation="storage",
-        )
+        existing_id = confluence.get_page_id(space=space_key, title=title)
+        if existing_id:
+            log.info("Updating page '%s' (id=%s)", title, existing_id)
+            confluence.update_page(
+                page_id=existing_id,
+                title=title,
+                body=body,
+                representation="storage",
+            )
+            if labels:
+                apply_labels(confluence, existing_id, labels)
+            write_confluence_id(file_path, existing_id)
+        else:
+            parent_id = resolve_parent_chain(confluence, space_key, file_path)
+            log.info("Creating content page '%s'", title)
+            result = confluence.create_page(
+                space=space_key,
+                title=title,
+                body=body,
+                parent_id=parent_id,
+                representation="storage",
+            )
+            new_id = str(result["id"])
+            log.info("Created page '%s' → id=%s", title, new_id)
+            if labels:
+                apply_labels(confluence, new_id, labels)
+            write_confluence_id(file_path, new_id)
 
 
 def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
     """Remove the Confluence page corresponding to a deleted markdown file."""
-    title = str(file_path.with_suffix(""))
-    page_id = confluence.get_page_id(space=space_key, title=title)
-    if not page_id:
-        log.warning("No Confluence page found for deleted file '%s' — skipping", title)
-        return
-    log.info("Removing page '%s' (id=%s)", title, page_id)
-    confluence.remove_page(page_id)
+    # Read the deleted file from the previous commit to get its confluence_id
+    pinned_id = None
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD^:{file_path}"],
+            capture_output=True, text=True, check=True,
+        )
+        post = frontmatter.loads(result.stdout)
+        pinned_id = post.metadata.get("confluence_id")
+    except subprocess.CalledProcessError:
+        log.warning("Could not read %s from previous commit — falling back to title lookup", file_path)
+
+    if pinned_id:
+        log.info("Removing page by pinned confluence_id=%s (%s)", pinned_id, file_path)
+        confluence.remove_page(pinned_id)
+    else:
+        title = str(file_path.with_suffix(""))
+        page_id = confluence.get_page_id(space=space_key, title=title)
+        if not page_id:
+            log.warning("No Confluence page found for deleted file '%s' — skipping", title)
+            return
+        log.info("Removing page '%s' (id=%s)", title, page_id)
+        confluence.remove_page(page_id)
 
 
 def main() -> None:
@@ -170,6 +242,9 @@ def main() -> None:
         password=config["confluence_api_token"],
         cloud=True,
     )
+
+    # Clear write-back tracking file
+    Path(WRITTEN_BACK_FILE).unlink(missing_ok=True)
 
     errors = []
 

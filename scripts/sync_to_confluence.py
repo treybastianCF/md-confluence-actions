@@ -132,14 +132,11 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
     existing_id = confluence.get_page_id(space=space_key, title=title)
 
     if existing_id:
-        page_info = confluence.get_page_by_id(existing_id, expand="version")
-        current_version = page_info["version"]["number"]
-        log.info("Updating page '%s' (id=%s) to version %d", title, existing_id, current_version + 1)
+        log.info("Updating page '%s' (id=%s)", title, existing_id)
         confluence.update_page(
             page_id=existing_id,
             title=title,
             body=body,
-            version_number=current_version + 1,
             representation="storage",
         )
     else:

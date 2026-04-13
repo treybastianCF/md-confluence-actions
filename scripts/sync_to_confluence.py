@@ -156,6 +156,32 @@ def resolve_parent_chain(
     return parent_id
 
 
+def is_archived_path(file_path: Path) -> bool:
+    """Return True if any path segment is named 'archived'."""
+    return "archived" in file_path.parts
+
+
+def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
+    """Archive a Confluence page by setting its status to 'archived'. Idempotent."""
+    page_info = confluence.get_page_by_id(page_id, expand="version")
+    if page_info.get("status") == "archived":
+        log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
+        return
+    current_version = page_info["version"]["number"]
+    confluence.request(
+        "PUT",
+        f"/wiki/rest/api/content/{page_id}",
+        json={
+            "id": page_id,
+            "type": "page",
+            "status": "archived",
+            "title": title,
+            "version": {"number": current_version + 1},
+        },
+    )
+    log.info("Archived page '%s' (id=%s)", title, page_id)
+
+
 def apply_labels(confluence: Confluence, page_id: str, labels: list[str]) -> None:
     """Add labels to a Confluence page via the REST API."""
     if not labels:
@@ -179,6 +205,20 @@ def sync_page(confluence: Confluence, space_key: str, file_path: Path) -> None:
     body = md_to_storage(post.content)
     labels = meta.get("labels", [])
     pinned_id = meta.get("confluence_id")
+
+    if meta.get("archived") or is_archived_path(file_path):
+        log.info("Archiving page for %s", file_path)
+        page_id = pinned_id
+        if not page_id:
+            path_title = str(file_path.with_suffix(""))
+            page_id = confluence.get_page_id(space=space_key, title=title)
+            if not page_id and title != path_title:
+                page_id = confluence.get_page_id(space=space_key, title=path_title)
+        if page_id:
+            archive_page(confluence, page_id, title)
+        else:
+            log.warning("No Confluence page found to archive for '%s' — skipping", file_path)
+        return
 
     if pinned_id:
         # Update by pinned ID — title lookup not needed
@@ -245,17 +285,21 @@ def delete_page(confluence: Confluence, space_key: str, file_path: Path) -> None
     except subprocess.CalledProcessError:
         log.warning("Could not read %s from previous commit — falling back to title lookup", file_path)
 
-    if pinned_id:
-        log.info("Removing page by pinned confluence_id=%s (%s)", pinned_id, file_path)
-        confluence.remove_page(pinned_id)
-    else:
+    page_id = pinned_id
+    if not page_id:
         title = str(file_path.with_suffix(""))
         page_id = confluence.get_page_id(space=space_key, title=title)
         if not page_id:
             log.warning("No Confluence page found for deleted file '%s' — skipping", title)
             return
-        log.info("Removing page '%s' (id=%s)", title, page_id)
-        confluence.remove_page(page_id)
+
+    page_info = confluence.get_page_by_id(page_id, expand="version")
+    if page_info.get("status") == "archived":
+        log.info("Page (id=%s) is already archived — skipping hard delete", page_id)
+        return
+
+    log.info("Removing page (id=%s) for deleted file %s", page_id, file_path)
+    confluence.remove_page(page_id)
 
 
 def main() -> None:

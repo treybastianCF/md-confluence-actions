@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '**.md'
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -26,22 +27,33 @@ jobs:
           files: |
             **.md
 
+      - name: Determine files to sync
+        id: files
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "Full sync — syncing all markdown files"
+            FILES=$(git ls-files '*.md' | tr '\n' ' ')
+          else
+            FILES="${{ steps.changed-files.outputs.all_changed_files }}"
+          fi
+          echo "to_sync=$FILES" >> $GITHUB_OUTPUT
+
       - name: Set up Python
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.files.outputs.to_sync != ''
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install dependencies
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.files.outputs.to_sync != ''
         run: pip install -r scripts/requirements.txt
 
       - name: Sync changed files to Confluence
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.files.outputs.to_sync != ''
         env:
           CONFLUENCE_URL: ${{ secrets.CONFLUENCE_URL }}
           CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
           CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
           CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
-          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+          CHANGED_FILES: ${{ steps.files.outputs.to_sync }}
         run: python scripts/sync_to_confluence.py

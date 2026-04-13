@@ -7,7 +7,7 @@ A GitHub Actions pipeline that automatically syncs changed markdown files to Con
 1. You push a commit that includes changes to `.md` files
 2. GitHub Actions detects which markdown files changed (only those files, not all of them)
 3. The sync script reads each file's frontmatter, converts the body from Markdown → HTML, and creates or updates the corresponding Confluence page
-4. After creating or first finding a page, the script writes `confluence_id` back to the file's frontmatter in a follow-up commit — future syncs use this ID directly
+4. After creating or first finding a page, the script writes `confluence_id` and `confluence_version` back to the file's frontmatter in a follow-up `[skip ci]` commit — future syncs use the ID directly and check the version for drift
 5. Folder structure is mirrored: `docs/api/endpoints.md` becomes a page nested under folder pages `docs` → `docs/api` → `docs/api/endpoints`
 
 ## Repository Structure
@@ -56,17 +56,21 @@ All frontmatter fields are optional. Add them to the top of any markdown file:
 
 ```yaml
 ---
-title: "My Page Title"      # Overrides the default path-based title in Confluence
-draft: true                  # Exclude this file from sync entirely
-archived: true               # Archive the page in Confluence (stops syncing updates)
-labels:                      # Confluence labels to apply to the page
+title: "My Page Title"           # Overrides the default path-based title in Confluence
+draft: true                       # Exclude this file from sync entirely
+archived: true                    # Archive the page in Confluence (stops syncing updates)
+lock: true                        # Restrict Confluence editing to the sync service account only
+labels:                           # Confluence labels to apply to the page
   - api
   - reference
-confluence_id: "4351721583"  # Auto-populated after first sync — do not set manually
+confluence_id: "4351721583"       # Auto-populated after first sync — do not set manually
+confluence_version: 3             # Auto-populated — used to detect external Confluence edits
 ---
 ```
 
-**`confluence_id`** is written back automatically after the first sync. Once set, the script uses it for all future lookups so renaming `title` is always safe.
+**`confluence_id`** and **`confluence_version`** are written back automatically after every sync. `confluence_id` ensures reliable updates even if `title` changes. `confluence_version` tracks the Confluence version number after the last sync — if someone edits the page directly in Confluence, the next sync will log a warning before overwriting with the git version.
+
+**`lock: true`** applies a Confluence page restriction after each sync so only the service account can edit the page. To verify: open the page in Confluence, go to **... → Page restrictions**, and confirm your service account is the only user with edit permission.
 
 ## Page Title Convention
 

@@ -217,6 +217,7 @@ def lock_page(confluence: Confluence, page_id: str, account_id: str) -> None:
         }
     ]
     response = confluence._session.put(url, json=payload)
+    log.info("Lock API response (%d): %s", response.status_code, response.text[:500])
     response.raise_for_status()
     log.info("Locked page %s (edit restricted to service account %s)", page_id, account_id)
 

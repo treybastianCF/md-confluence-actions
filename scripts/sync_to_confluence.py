@@ -162,12 +162,13 @@ def is_archived_path(file_path: Path) -> bool:
 
 
 def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
-    """Archive a Confluence page using the Confluence Cloud v2 page update API. Idempotent.
+    """Archive a Confluence page using the Confluence Cloud v2 PUT /pages/{id} API.
 
-    The v1 REST API status enum does not include 'archived' — only the v2 PUT /pages/{id}
-    endpoint supports status: 'archived'.
+    The v1 REST API status enum does not include 'archived'.
+    The v2 PUT requires: id, title, status, spaceId, version.number, and body.
+    Body must be fetched first using body-format=storage.
     """
-    page_info = confluence.get(f"api/v2/pages/{page_id}")
+    page_info = confluence.get(f"api/v2/pages/{page_id}", params={"body-format": "storage"})
     if page_info.get("status") == "archived":
         log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
         return
@@ -178,9 +179,10 @@ def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
             "status": "archived",
             "title": page_info["title"],
             "spaceId": page_info["spaceId"],
-            "version": {
-                "number": page_info["version"]["number"] + 1,
-                "message": "",
+            "version": {"number": page_info["version"]["number"] + 1},
+            "body": {
+                "representation": "storage",
+                "value": page_info["body"]["storage"]["value"],
             },
         },
     )

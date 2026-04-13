@@ -168,10 +168,9 @@ def archive_page(confluence: Confluence, page_id: str, title: str) -> None:
         log.info("Page '%s' (id=%s) is already archived — skipping", title, page_id)
         return
     current_version = page_info["version"]["number"]
-    confluence.request(
-        "PUT",
-        f"/wiki/rest/api/content/{page_id}",
-        json={
+    confluence.put(
+        f"rest/api/content/{page_id}",
+        data={
             "id": page_id,
             "type": "page",
             "status": "archived",

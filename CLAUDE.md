@@ -56,7 +56,7 @@ After the sync script runs, a second step reads `/tmp/written_back.txt` and comm
 - Labels use a direct `confluence.post("rest/api/content/{id}/label", data=[...])` call rather than `set_page_label()` to avoid silent failures
 - Authentication uses email + API token with `cloud=True`
 - **Archiving**: neither `PUT /rest/api/content/{id}` with `status: "archived"` (silently ignored by v1) nor `PUT /api/v2/pages/{id}` (`PageUpdateAllowedStatus` only allows `CURRENT`/`DRAFT`) work. The correct endpoint is `POST /rest/api/content/archive` with body `{"pages": [{"id": "..."}]}`, called via `confluence._session.post()` to bypass library error mangling
-- **Page locking**: uses `PUT /rest/api/content/{id}/restriction/byOperation/update` with the service account's `accountId` (fetched via `GET /rest/api/user/current` at startup). Called via `confluence._session.put()` to bypass library error mangling. `atlassian-python-api` does not have a helper method for restrictions.
+- **Page locking**: uses `PUT /rest/api/content/{id}/restriction` (array payload) with the service account's `accountId` (fetched via `GET /rest/api/user/current` at startup). Called via `confluence._session.put()` to bypass library error mangling. The `byOperation/update` sub-endpoint returns 405 on Confluence Cloud — use the base `/restriction` endpoint instead. `atlassian-python-api` does not have a helper method for restrictions.
 - **Write-backs**: `confluence_version` is written back after every sync (not just on first sync), so every run produces a `[skip ci]` commit with updated version metadata in the frontmatter of synced files
 
 ## Required GitHub Secrets

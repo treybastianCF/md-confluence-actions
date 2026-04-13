@@ -201,15 +201,21 @@ def get_service_account_id(confluence: Confluence) -> str:
 
 
 def lock_page(confluence: Confluence, page_id: str, account_id: str) -> None:
-    """Restrict page editing to only the service account."""
-    url = f"{confluence.url}/rest/api/content/{page_id}/restriction/byOperation/update"
-    payload = {
-        "operation": "update",
-        "restrictions": {
-            "user": [{"type": "known", "accountId": account_id}],
-            "group": [],
-        },
-    }
+    """Restrict page editing to only the service account.
+
+    Uses PUT /rest/api/content/{id}/restriction which replaces all restrictions.
+    The byOperation/update sub-endpoint returns 405 on Confluence Cloud.
+    """
+    url = f"{confluence.url}/rest/api/content/{page_id}/restriction"
+    payload = [
+        {
+            "operation": "update",
+            "restrictions": {
+                "user": [{"type": "known", "accountId": account_id}],
+                "group": [],
+            },
+        }
+    ]
     response = confluence._session.put(url, json=payload)
     response.raise_for_status()
     log.info("Locked page %s (edit restricted to service account %s)", page_id, account_id)
